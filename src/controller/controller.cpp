@@ -62,26 +62,6 @@ void ControllerNode::trajectoryCallback(const nav_msgs::Path::ConstPtr& trajecto
 }
 
 void ControllerNode::controlLoopCallback(const ros::TimerEvent& timerEvent) {
-   // 检查是否需要停车
-    if (needToStop) {
-            // 获取当前时间
-        ros::Time currentTime = ros::Time::now();
-
-            // 计算停车时间
-        double stopDuration = (currentTime - stopStartTime).toSec();
-
-            // 如果停车时间大于等于5秒，则停车结束，继续行驶
-        if (stopDuration >= 3.0) {
-                needToStop = false;
-                startVehicle();
-                return;
-        }
-        else {
-                // 发布停车指令，速度为0，转向角为0
-                publishStopCommand();
-                return;
-        }
-    }
 
     if (!checkTrajectoryExists()) {
         return;
@@ -97,6 +77,38 @@ void ControllerNode::controlLoopCallback(const ros::TimerEvent& timerEvent) {
     Pose vehiclePose;
     if (!currentVehiclePose(vehiclePose)) {
         return;
+    }
+   // 检查是否需要停车
+    if (needToStop) {
+            // 获取当前时间
+        ros::Time needToStopTime = ros::Time::now();
+
+            // 计算停车时间
+        double stopDuration = (needToStopTime - stopStartTime).toSec();
+
+            // 如果停车时间大于等于5秒，则停车结束，继续行驶
+        if (stopDuration >= 3.0) {
+            needToStop = false;
+            // startVehicle();
+            ros::Time stamp = ros::Time::now();
+            ControlCommand controlCommand =
+                controller_.getControlCommand(vehiclePose, *trajectory_, interface_.publish_debug_info);
+            auto controlCommandMsg =
+                conversions::controlCommandToAckermannDriveStamped(controlCommand, stamp, interface_.vehicle_frame);
+            interface_.control_command_publisher.publish(controlCommandMsg);
+            visualization_msgs::Marker debugControlCommandViz =
+                conversions::controlCommandToMarkerMsg(controlCommand, stamp, interface_.vehicle_frame);
+            interface_.debug_control_command_viz_publisher.publish(debugControlCommandViz);
+            if (controlCommand.debugInfo) {
+                publishDebugInfo(controlCommand.debugInfo.value(), stamp);
+            }
+            return;
+        }
+        else {
+                // 发布停车指令，速度为0，转向角为0
+                publishStopCommand();
+                return;
+        }
     }
 
     ros::Time stamp = ros::Time::now();
@@ -213,21 +225,21 @@ void ControllerNode::setControllerParameters() {
 void ControllerNode::yoloCallback(const detection_msgs::BoundingBoxes::ConstPtr& msg){
         // 如果车辆已经启动，并且启动时间小于阈值，则忽略对停车标志的检测
         if (isVehicleStarted) {
-            ros::Time currentTime = ros::Time::now();
-            double elapsedTime = (currentTime - vehicleStartTime).toSec();
+            ros::Time isVehicleStartedTime = ros::Time::now();
+            double elapsedTime = (isVehicleStartedTime - stopStartTime).toSec();
             if (elapsedTime < ignoreStopSignTimeThreshold) {
                 return;
             }
             else {
                 isVehicleStarted = false;
-                return;
             }
+            return;
         }
 
         else {
-                    // 遍历所有检测到的边界框
+        // 遍历所有检测到的边界框
         for(const auto& bbox:msg->bounding_boxes){
-            // 检查是否为stop
+        // 检查是否为stop
             if(bbox.Class=="stop"){
                 // 检查到停车标志，获取距离信息
                 double distance = bbox.distance;
@@ -235,10 +247,10 @@ void ControllerNode::yoloCallback(const detection_msgs::BoundingBoxes::ConstPtr&
                 if (distance < 1500.0) {
                     // 设置停车标志位为true
                     needToStop = true;
-
                     // 获取当前时间作为停车开始时间
+                    isVehicleStarted = true;
                     stopStartTime = ros::Time::now();
-                    // publishStopCommand();
+
 
                 }
             }
@@ -248,17 +260,9 @@ void ControllerNode::yoloCallback(const detection_msgs::BoundingBoxes::ConstPtr&
 
 }
 
-// void ControllerNode::stopVehicle(){
-//     ackermann_msgs::AckermannDrive ackermanMsg;
-//     ackermanMsg.speed=0.0;
-//     ackermanMsg.steering_angle=0.0;
-//     ackermanMsg.acceleration=0.0;
-//     interface_.control_command_publisher.publish(ackermanMsg);
+// void ControllerNode::startVehicle() {
+//         isVehicleStarted = true;
+//         vehicleStartTime = ros::Time::now();
 // }
-
-void ControllerNode::startVehicle() {
-        isVehicleStarted = true;
-        vehicleStartTime = ros::Time::now();
-}
 
 } // namespace kal_controller_ros_tool
